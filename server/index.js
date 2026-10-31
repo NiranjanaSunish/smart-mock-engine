@@ -38,41 +38,54 @@ app.post('/api/contracts/generate', async (req, res) => {
 
     console.log('Generating contract for prompt:', prompt);
 
-    const systemPrompt = `You are a Principal API Architect. Design a production-grade REST API endpoint specification and realistic mock response based on this requirement: "${prompt}".
+    const systemPrompt = `You are an API Architect. Convert this requirement into a REST API specification and mock response: "${prompt}".
 
-Output ONLY a valid raw JSON object (no markdown, no backticks, no explanations) matching this exact format:
+Return ONLY a valid JSON object without markdown fences, formatted exactly as:
 {
-  "title": "Short descriptive title",
-  "method": "GET or POST or PUT or DELETE",
-  "endpointPath": "clean-url-slug-without-leading-slashes (e.g. orders/checkout or users/profile)",
+  "title": "Endpoint Title",
+  "method": "POST",
+  "endpointPath": "orders/checkout",
   "statusCode": 200,
   "requestSchema": {
-    "fields": ["field1", "field2"]
+    "fields": ["items", "couponCode"]
   },
   "mockResponse": {
-    "status": "success",
-    "data": "realistic nested objects with 2-4 fields"
+    "orderId": "ORD-98213",
+    "status": "confirmed",
+    "total": 129.50
   }
 }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       contents: systemPrompt,
       config: {
         responseMimeType: 'application/json'
       }
     });
 
-    console.log('Gemini raw response:', response.text);
+    // Safely extract text from response object across SDK versions
+    let rawText = '';
+    if (typeof response.text === 'function') {
+      rawText = response.text();
+    } else if (typeof response.text === 'string') {
+      rawText = response.text;
+    } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
+      rawText = response.candidates[0].content.parts[0].text;
+    }
 
-    // Strip markdown formatting if present
-    let rawText = response.text || '{}';
-    rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    console.log('Gemini raw output:', rawText);
 
-    const parsed = JSON.parse(rawText);
+    // Extract JSON substring cleanly (handles backticks or unexpected lead-in text)
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error(`Model returned non-JSON text: ${rawText.slice(0, 100)}...`);
+    }
 
-    // Normalize path
-    const cleanedPath = (parsed.endpointPath || 'test-endpoint')
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // Normalize endpointPath
+    const cleanedPath = (parsed.endpointPath || 'sample-endpoint')
       .replace(/^\/+/, '')
       .replace(/\s+/g, '-')
       .toLowerCase();
