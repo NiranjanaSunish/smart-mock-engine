@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://smart-mock-engine-api.onrender.com';
 
 export default function App() {
   const [prompt, setPrompt] = useState('');
