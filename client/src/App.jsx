@@ -35,15 +35,24 @@ const handleGenerate = async (e) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
       });
-      const data = await res.json();
+
+      const raw = await res.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        throw new Error(`Server returned non-JSON (${res.status}): ${raw.slice(0, 120)}`);
+      }
+
       if (!res.ok) {
         throw new Error(data.details || data.error || `HTTP ${res.status}`);
       }
+
       setActiveContract(data);
-      setContracts([data, ...contracts.filter(c => c._id !== data._id)]);
+      setContracts(prev => [data, ...prev.filter(c => c._id !== data._id)]);
       setPrompt('');
     } catch (e) {
-      alert(`Backend Error: ${e.message}`);
+      alert(`Error: ${e.message}`);
     } finally {
       setLoading(false);
     }

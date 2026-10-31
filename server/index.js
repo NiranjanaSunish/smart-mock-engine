@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 app.use(cors());
@@ -13,7 +12,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('MongoDB connected'))
   .catch((err) => console.error('MongoDB error:', err));
 
-// 2. Schema: Stores Contract & Live Mock Data
+// 2. Contract Schema
 const ContractSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: String,
@@ -27,20 +26,20 @@ const ContractSchema = new mongoose.Schema({
 
 const Contract = mongoose.model('Contract', ContractSchema);
 
-// 3. Gemini Setup
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-// 4. API Generation Endpoint
+// 3. API Generation Endpoint using Native Gemini REST Call
 app.post('/api/contracts/generate', async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
-    console.log('Generating contract for prompt:', prompt);
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not defined in environment variables' });
+    }
 
     const systemPrompt = `You are an API Architect. Convert this requirement into a REST API specification and mock response: "${prompt}".
 
-Return ONLY a valid JSON object without markdown fences, formatted exactly as:
+Output strictly valid JSON with no markdown formatting or code blocks:
 {
   "title": "Endpoint Title",
   "method": "POST",
@@ -56,35 +55,36 @@ Return ONLY a valid JSON object without markdown fences, formatted exactly as:
   }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: systemPrompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+    const aiRes = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: systemPrompt }] }],
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      })
     });
 
-    // Safely extract text from response object across SDK versions
-    let rawText = '';
-    if (typeof response.text === 'function') {
-      rawText = response.text();
-    } else if (typeof response.text === 'string') {
-      rawText = response.text;
-    } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
-      rawText = response.candidates[0].content.parts[0].text;
+    const aiData = await aiRes.json();
+
+    if (!aiRes.ok) {
+      return res.status(500).json({ 
+        error: 'Gemini API Error', 
+        details: aiData.error?.message || JSON.stringify(aiData) 
+      });
     }
 
-    console.log('Gemini raw output:', rawText);
-
-    // Extract JSON substring cleanly (handles backticks or unexpected lead-in text)
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    const textOutput = aiData.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const jsonMatch = textOutput.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error(`Model returned non-JSON text: ${rawText.slice(0, 100)}...`);
+      return res.status(500).json({ error: 'Model output parsing error', raw: textOutput });
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
 
-    // Normalize endpointPath
     const cleanedPath = (parsed.endpointPath || 'sample-endpoint')
       .replace(/^\/+/, '')
       .replace(/\s+/g, '-')
@@ -114,7 +114,7 @@ Return ONLY a valid JSON object without markdown fences, formatted exactly as:
   }
 });
 
-// 5. Get List of Saved Contracts
+// 4. Get List of Saved Contracts
 app.get('/api/contracts', async (req, res) => {
   try {
     const contracts = await Contract.find().sort({ createdAt: -1 }).limit(20);
@@ -124,7 +124,7 @@ app.get('/api/contracts', async (req, res) => {
   }
 });
 
-// 6. Delete a Contract
+// 5. Delete a Contract
 app.delete('/api/contracts/:id', async (req, res) => {
   try {
     await Contract.findByIdAndDelete(req.params.id);
@@ -134,7 +134,7 @@ app.delete('/api/contracts/:id', async (req, res) => {
   }
 });
 
-// 7. Dynamic Mock Engine (Catch-All Mock Runner)
+// 6. Dynamic Mock Engine
 app.all('/api/mock/{*splat}', async (req, res) => {
   try {
     const rawPath = (req.params.splat || '').replace(/^\/+/, '').toLowerCase();
