@@ -25,7 +25,7 @@ export default function App() {
     }
   };
 
-  const handleGenerate = async (e) => {
+const handleGenerate = async (e) => {
     e.preventDefault();
     setLoading(true);
     setTestResult(null);
@@ -36,11 +36,14 @@ export default function App() {
         body: JSON.stringify({ prompt })
       });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.details || data.error || `HTTP ${res.status}`);
+      }
       setActiveContract(data);
       setContracts([data, ...contracts.filter(c => c._id !== data._id)]);
       setPrompt('');
     } catch (e) {
-      alert('Error generating contract');
+      alert(`Backend Error: ${e.message}`);
     } finally {
       setLoading(false);
     }

@@ -36,72 +36,68 @@ app.post('/api/contracts/generate', async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
-    const aiPrompt = `You are a Principal API Architect. Design a production-grade REST API endpoint specification and realistic mock response based on this requirement: "${prompt}".
-    Ensure the endpointPath is a clean URL slug without leading slashes (e.g., 'orders/checkout' or 'products/inventory').
-    Generate realistic, diverse mock data with 2-4 nested entities.`;
+    console.log('Generating contract for prompt:', prompt);
+
+    const systemPrompt = `You are a Principal API Architect. Design a production-grade REST API endpoint specification and realistic mock response based on this requirement: "${prompt}".
+
+Output ONLY a valid raw JSON object (no markdown, no backticks, no explanations) matching this exact format:
+{
+  "title": "Short descriptive title",
+  "method": "GET or POST or PUT or DELETE",
+  "endpointPath": "clean-url-slug-without-leading-slashes (e.g. orders/checkout or users/profile)",
+  "statusCode": 200,
+  "requestSchema": {
+    "fields": ["field1", "field2"]
+  },
+  "mockResponse": {
+    "status": "success",
+    "data": "realistic nested objects with 2-4 fields"
+  }
+}`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: aiPrompt,
+      model: 'gemini-2.0-flash',
+      contents: systemPrompt,
       config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: "Short descriptive title" },
-            method: { type: 'string', enum: ["GET", "POST", "PUT", "DELETE"] },
-            endpointPath: { type: 'string', description: "URL slug, e.g., 'payments/verify'" },
-            statusCode: { type: 'integer', description: "HTTP status code, e.g., 200 or 201" },
-            requestSchema: { 
-              type: 'object', 
-              properties: {
-                fields: { type: 'array', items: { type: 'string' } }
-              }
-            },
-            mockResponse: { 
-              type: 'string', 
-              description: "A stringified JSON object representing a realistic production mock payload" 
-            }
-          },
-          required: ["title", "method", "endpointPath", "statusCode", "mockResponse"]
-        }
+        responseMimeType: 'application/json'
       }
     });
 
-    const parsed = JSON.parse(response.text);
-    
-    // Normalize path and parse response payload safely
-    const cleanedPath = parsed.endpointPath.replace(/^\/+/, '').toLowerCase();
-    let mockData;
-    if (typeof parsed.mockResponse === 'string') {
-      try {
-        mockData = JSON.parse(parsed.mockResponse);
-      } catch {
-        mockData = { message: parsed.mockResponse };
-      }
-    } else {
-      mockData = parsed.mockResponse || {};
-    }
+    console.log('Gemini raw response:', response.text);
 
-    // Upsert contract into MongoDB
+    // Strip markdown formatting if present
+    let rawText = response.text || '{}';
+    rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+
+    const parsed = JSON.parse(rawText);
+
+    // Normalize path
+    const cleanedPath = (parsed.endpointPath || 'test-endpoint')
+      .replace(/^\/+/, '')
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+
     const contract = await Contract.findOneAndUpdate(
       { endpointPath: cleanedPath },
       {
-        title: parsed.title,
+        title: parsed.title || 'Generated API',
         description: prompt,
-        method: parsed.method,
+        method: (parsed.method || 'GET').toUpperCase(),
         endpointPath: cleanedPath,
         statusCode: parsed.statusCode || 200,
         requestSchema: parsed.requestSchema || {},
-        mockResponse: mockData
+        mockResponse: parsed.mockResponse || { message: 'Sample output' }
       },
       { upsert: true, new: true }
     );
 
     res.status(201).json(contract);
   } catch (error) {
-    console.error('Generation Error:', error);
-    res.status(500).json({ error: 'Failed to generate contract', details: error.message });
+    console.error('Generation Error Detail:', error);
+    res.status(500).json({
+      error: 'Failed to generate contract',
+      details: error.message || String(error)
+    });
   }
 });
 
