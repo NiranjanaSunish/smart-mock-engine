@@ -109,11 +109,11 @@ app.delete('/api/contracts/:id', async (req, res) => {
   res.json({ success: true });
 });
 
-// 7. Dynamic Mock Engine (Catch-All Mock Runner)
-// Matches any call to /api/mock/* and serves the persisted mock payload
-app.all('/api/mock/*', async (req, res) => {
+// 7. Dynamic Mock Engine (Express 5 compatible wildcard)
+app.all('/api/mock/{*splat}', async (req, res) => {
   try {
-    const rawPath = req.params[0]?.toLowerCase();
+    // In Express 5 with {*splat}, req.params.splat contains the captured subpath
+    const rawPath = (req.params.splat || '').replace(/^\/+/, '').toLowerCase();
     const contract = await Contract.findOne({ endpointPath: rawPath });
 
     if (!contract) {
@@ -124,7 +124,6 @@ app.all('/api/mock/*', async (req, res) => {
       });
     }
 
-    // Optional: Return warning if method does not match
     if (req.method !== contract.method) {
       return res.status(405).json({
         error: `Method Not Allowed. Expected ${contract.method}, received ${req.method}`
