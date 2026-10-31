@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const { GoogleGenAI, Type } = require('@google/genai');
+const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 app.use(cors());
@@ -18,7 +18,7 @@ const ContractSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: String,
   method: { type: String, enum: ['GET', 'POST', 'PUT', 'DELETE'], default: 'GET' },
-  endpointPath: { type: String, required: true, unique: true }, // e.g. "checkout", "users-profile"
+  endpointPath: { type: String, required: true, unique: true },
   statusCode: { type: Number, default: 200 },
   requestSchema: mongoose.Schema.Types.Mixed,
   mockResponse: mongoose.Schema.Types.Mixed,
@@ -46,21 +46,20 @@ app.post('/api/contracts/generate', async (req, res) => {
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
-          type: Type.OBJECT,
+          type: 'object',
           properties: {
-            title: { type: Type.STRING, description: "Short descriptive title" },
-            method: { type: Type.STRING, enum: ["GET", "POST", "PUT", "DELETE"] },
-            endpointPath: { type: Type.STRING, description: "URL slug, e.g., 'payments/verify'" },
-            statusCode: { type: Type.INTEGER, description: "HTTP status code, e.g., 200 or 201" },
+            title: { type: 'string', description: "Short descriptive title" },
+            method: { type: 'string', enum: ["GET", "POST", "PUT", "DELETE"] },
+            endpointPath: { type: 'string', description: "URL slug, e.g., 'payments/verify'" },
+            statusCode: { type: 'integer', description: "HTTP status code, e.g., 200 or 201" },
             requestSchema: { 
-              type: Type.OBJECT, 
-              description: "JSON schema of expected request body (empty object if GET)",
+              type: 'object', 
               properties: {
-                fields: { type: Type.ARRAY, items: { type: Type.STRING } }
+                fields: { type: 'array', items: { type: 'string' } }
               }
             },
             mockResponse: { 
-              type: Type.STRING, 
+              type: 'string', 
               description: "A stringified JSON object representing a realistic production mock payload" 
             }
           },
@@ -71,11 +70,20 @@ app.post('/api/contracts/generate', async (req, res) => {
 
     const parsed = JSON.parse(response.text);
     
-    // Normalize path and parse response payload
+    // Normalize path and parse response payload safely
     const cleanedPath = parsed.endpointPath.replace(/^\/+/, '').toLowerCase();
-    const mockData = JSON.parse(parsed.mockResponse);
+    let mockData;
+    if (typeof parsed.mockResponse === 'string') {
+      try {
+        mockData = JSON.parse(parsed.mockResponse);
+      } catch {
+        mockData = { message: parsed.mockResponse };
+      }
+    } else {
+      mockData = parsed.mockResponse || {};
+    }
 
-    // Upsert contract so re-generating the same endpoint updates cleanly
+    // Upsert contract into MongoDB
     const contract = await Contract.findOneAndUpdate(
       { endpointPath: cleanedPath },
       {
@@ -99,20 +107,27 @@ app.post('/api/contracts/generate', async (req, res) => {
 
 // 5. Get List of Saved Contracts
 app.get('/api/contracts', async (req, res) => {
-  const contracts = await Contract.find().sort({ createdAt: -1 }).limit(20);
-  res.json(contracts);
+  try {
+    const contracts = await Contract.find().sort({ createdAt: -1 }).limit(20);
+    res.json(contracts);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load contracts' });
+  }
 });
 
 // 6. Delete a Contract
 app.delete('/api/contracts/:id', async (req, res) => {
-  await Contract.findByIdAndDelete(req.params.id);
-  res.json({ success: true });
+  try {
+    await Contract.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete' });
+  }
 });
 
-// 7. Dynamic Mock Engine (Express 5 compatible wildcard)
+// 7. Dynamic Mock Engine (Catch-All Mock Runner)
 app.all('/api/mock/{*splat}', async (req, res) => {
   try {
-    // In Express 5 with {*splat}, req.params.splat contains the captured subpath
     const rawPath = (req.params.splat || '').replace(/^\/+/, '').toLowerCase();
     const contract = await Contract.findOne({ endpointPath: rawPath });
 
